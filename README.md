@@ -1,3 +1,5 @@
+<img width="2752" height="1536" alt="header" src="https://github.com/user-attachments/assets/f9287e6d-7db3-44e0-9a95-3bf8020f3b19" />
+
 # OpenClaw Agent Dashboard
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
