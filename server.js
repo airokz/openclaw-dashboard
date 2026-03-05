@@ -2036,6 +2036,47 @@ const server = http.createServer((req, res) => {
       });
       return;
     }
+    if (req.url === '/api/docker') {
+      if (!requireAuth(req, res)) return;
+      const { execSync } = require('child_process');
+      const run = (cmd) => { try { return execSync(cmd, { timeout: 10000 }).toString(); } catch(e) { return e.stdout ? e.stdout.toString() : 'Error: ' + e.message; } };
+      try {
+        const containers = JSON.parse(run('docker ps -a --format "{{json .}}" | jq -s "."') || '[]');
+        const images = JSON.parse(run('docker images --format "{{json .}}" | jq -s "."') || '[]');
+        const system = run('docker system df 2>&1');
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ containers, images, system }));
+      } catch(e) {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ containers: [], images: [], system: 'Docker not available: ' + e.message }));
+      }
+      auditLog('docker_view', ip, {});
+      return;
+    }
+    if (req.url === '/api/docker/action' && req.method === 'POST') {
+      if (!requireAuth(req, res)) return;
+      let body = '';
+      req.on('data', c => { body += c; if (body.length > 4096) req.destroy(); });
+      req.on('end', () => {
+        try {
+          const { action, id } = JSON.parse(body);
+          const { execSync } = require('child_process');
+          const allowed = { 'start': 1, 'stop': 1, 'restart': 1, 'prune-containers': 1, 'prune-images': 1 };
+          if (!allowed[action]) { res.writeHead(400, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Invalid action' })); return; }
+          let result;
+          if (action === 'prune-containers') { result = execSync('docker container prune -f', { timeout: 30000 }).toString(); }
+          else if (action === 'prune-images') { result = execSync('docker image prune -f', { timeout: 30000 }).toString(); }
+          else {
+            if (!id || !/^[a-zA-Z0-9_.-]+$/.test(id)) { res.writeHead(400, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Invalid container ID' })); return; }
+            result = execSync('docker ' + action + ' ' + id, { timeout: 15000 }).toString();
+          }
+          auditLog('docker_action', ip, { action, id });
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ ok: true, result }));
+        } catch(e) { res.writeHead(500, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: e.message })); }
+      });
+      return;
+    }
     if (req.url === '/api/sys-security') {
       const { execSync } = require('child_process');
       const run = (cmd) => { try { return execSync(cmd, { timeout: 10000 }).toString().replace(/</g, '&lt;').replace(/>/g, '&gt;'); } catch(e) { return e.stdout ? e.stdout.toString().replace(/</g, '&lt;').replace(/>/g, '&gt;') : 'Error: ' + e.message; } };
