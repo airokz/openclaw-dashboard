@@ -1353,6 +1353,10 @@ body.light-theme ::selection { background: rgba(99,102,241,0.2); }
         <span class="icon">🔒</span>
         <span class="nav-text">Security</span>
       </div>
+      <div class="nav-item" data-page="sys-security">
+        <span class="icon">🛡️</span>
+        <span class="nav-text">Sys Security</span>
+      </div>
     </nav>
     <div style="padding:16px;border-top:1px solid var(--border);margin-top:auto;">
       <div id="mfaStatusIndicator" style="padding:4px 8px;margin-bottom:8px;font-size:10px;text-align:center;border-radius:6px;display:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;"></div>
@@ -2056,6 +2060,37 @@ body.light-theme ::selection { background: rgba(99,102,241,0.2); }
       </div>
     </div>
 
+    <div class="page" id="sys-security">
+      <div class="page-header">
+        <h1 class="page-title">System Security</h1>
+        <p class="page-subtitle">Firewall, ports, fail2ban and SSH monitoring</p>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;">
+        <div class="card">
+          <div class="card-title">🔥 Firewall (UFW)</div>
+          <pre id="secUfw" style="font-size:12px;max-height:300px;overflow-y:auto;white-space:pre-wrap;">Loading...</pre>
+        </div>
+        <div class="card">
+          <div class="card-title">🚪 Open Ports</div>
+          <pre id="secPorts" style="font-size:12px;max-height:300px;overflow-y:auto;white-space:pre-wrap;">Loading...</pre>
+        </div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
+        <div class="card">
+          <div class="card-title">🛡️ Fail2ban Status</div>
+          <pre id="secF2b" style="font-size:12px;max-height:300px;overflow-y:auto;white-space:pre-wrap;">Loading...</pre>
+        </div>
+        <div class="card">
+          <div class="card-title">🔑 Failed SSH Logins (last 50)</div>
+          <pre id="secSsh" style="font-size:12px;max-height:300px;overflow-y:auto;white-space:pre-wrap;">Loading...</pre>
+        </div>
+      </div>
+      <div class="card" style="margin-top:16px;">
+        <div class="card-title">🔍 OpenClaw Security Audit</div>
+        <pre id="secAudit" style="font-size:12px;max-height:400px;overflow-y:auto;white-space:pre-wrap;">Loading...</pre>
+      </div>
+    </div>
+
   </main>
 </div>
 
@@ -2128,6 +2163,7 @@ function getApiBasePath() {
 }
 
 const API_BASE = getApiBasePath();
+let sysSecAuthed = false;
 const TOKEN_KEY = 'dashboardToken';
 const TOKEN_EXPIRY_KEY = 'dashboardTokenExpiry';
 const TOKEN_LIFETIME = 24 * 60 * 60 * 1000;
@@ -3057,6 +3093,7 @@ let notificationsEnabled = false;
 document.querySelectorAll('.nav-item').forEach(item => {
   item.addEventListener('click', () => {
     const page = item.dataset.page;
+    if ((page === 'sys-security' || page === 'security') && !sysSecAuthed) { showReauthModal(page); return; }
     document.querySelectorAll('.nav-item').forEach(i => i.classList.remove('active'));
     item.classList.add('active');
     document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
@@ -5326,6 +5363,86 @@ function toggleTheme() {
     document.getElementById('themeToggle').textContent = '☀️';
   }
 })();
+
+async function fetchSysSecurity() {
+  try {
+    const res = await authFetch(API_BASE + '/api/sys-security');
+    const data = await res.json();
+    document.getElementById('secUfw').innerHTML = data.ufw || 'N/A';
+    document.getElementById('secPorts').innerHTML = data.ports || 'N/A';
+    document.getElementById('secF2b').innerHTML = data.fail2ban || 'N/A';
+    document.getElementById('secSsh').innerHTML = data.ssh || 'N/A';
+    document.getElementById('secAudit').innerHTML = data.audit || 'N/A';
+  } catch(e) { showToast('Security fetch error: ' + e.message, 'warning'); }
+}
+
+let reauthTargetPage = 'sys-security';
+function showReauthModal(targetPage) {
+  reauthTargetPage = targetPage || 'sys-security';
+  let overlay = document.getElementById('reauthOverlay');
+  if (!overlay) {
+    overlay = document.createElement('div');
+    overlay.id = 'reauthOverlay';
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:600;display:flex;align-items:center;justify-content:center;';
+    overlay.innerHTML = '<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:16px;padding:32px;max-width:380px;width:90%;">' +
+      '<h3 style="margin-bottom:8px;">🔒 Re-authentication Required</h3>' +
+      '<p style="font-size:13px;color:var(--text-secondary);margin-bottom:20px;">Enter your credentials to access System Security.</p>' +
+      '<input type="password" id="reauthPass" placeholder="Password" style="width:100%;padding:12px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;color:var(--text-primary);font-size:14px;margin-bottom:12px;">' +
+      '<input type="text" id="reauthTotp" placeholder="Authenticator Code (if enabled)" style="width:100%;padding:12px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;color:var(--text-primary);font-size:14px;margin-bottom:12px;font-family:JetBrains Mono,monospace;" maxlength="6" autocomplete="one-time-code">' +
+      '<div id="reauthError" style="display:none;color:var(--red);font-size:12px;margin-bottom:12px;padding:8px;background:rgba(239,68,68,0.1);border-radius:6px;"></div>' +
+      '<div style="display:flex;gap:8px;">' +
+      '<button onclick="submitReauth()" style="flex:1;padding:12px;background:linear-gradient(135deg,var(--accent),var(--purple));color:#fff;border:none;border-radius:8px;font-weight:600;cursor:pointer;">Verify</button>' +
+      '<button onclick="cancelReauth()" style="flex:1;padding:12px;background:var(--bg-secondary);color:var(--text-primary);border:1px solid var(--border);border-radius:8px;font-weight:500;cursor:pointer;">Cancel</button>' +
+      '</div></div>';
+    document.body.appendChild(overlay);
+    document.getElementById('reauthPass').addEventListener('keydown', e => { if(e.key === 'Enter') document.getElementById('reauthTotp').focus(); });
+    document.getElementById('reauthTotp').addEventListener('keydown', e => { if(e.key === 'Enter') submitReauth(); });
+  }
+  overlay.style.display = 'flex';
+  document.getElementById('reauthPass').value = '';
+  document.getElementById('reauthTotp').value = '';
+  document.getElementById('reauthError').style.display = 'none';
+  setTimeout(() => document.getElementById('reauthPass').focus(), 100);
+}
+
+async function submitReauth() {
+  const pass = document.getElementById('reauthPass').value;
+  const totp = document.getElementById('reauthTotp').value;
+  const errEl = document.getElementById('reauthError');
+  if (!pass) { errEl.textContent = 'Password required'; errEl.style.display = 'block'; return; }
+  try {
+    const token = getStoredToken();
+    const res = await fetch(API_BASE + '/api/reauth', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+      body: JSON.stringify({ password: pass, totp: totp || undefined })
+    });
+    const data = await res.json();
+    if (data.needsTotp && !totp) { errEl.textContent = 'Authenticator code required'; errEl.style.display = 'block'; document.getElementById('reauthTotp').focus(); return; }
+    if (data.error) { errEl.textContent = data.error; errEl.style.display = 'block'; return; }
+    sysSecAuthed = true;
+    document.getElementById('reauthOverlay').style.display = 'none';
+    document.querySelectorAll('.nav-item').forEach(i => i.classList.remove('active'));
+    document.querySelector('[data-page="' + reauthTargetPage + '"]').classList.add('active');
+    document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+    document.getElementById(reauthTargetPage).classList.add('active');
+    if (reauthTargetPage === 'sys-security') fetchSysSecurity();
+  } catch(e) { errEl.textContent = 'Error: ' + e.message; errEl.style.display = 'block'; }
+}
+
+function cancelReauth() {
+  document.getElementById('reauthOverlay').style.display = 'none';
+  document.querySelector('[data-page="overview"]').click();
+}
+
+document.querySelectorAll('.nav-item').forEach(item => {
+  item.addEventListener('click', () => {
+    if (item.dataset.page === 'sys-security') {
+      if (!sysSecAuthed) { showReauthModal(); return; }
+      fetchSysSecurity();
+    }
+  });
+});
 </script>
 </body>
 </html>

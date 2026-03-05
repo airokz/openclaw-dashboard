@@ -1973,6 +1973,48 @@ const server = http.createServer((req, res) => {
       res.end(JSON.stringify({ name: 'OpenClaw Dashboard', version: '1.0.0' }));
       return;
     }
+    if (req.url === '/api/reauth' && req.method === 'POST') {
+      let body = '';
+      req.on('data', c => body += c);
+      req.on('end', () => {
+        try {
+          const { password, totp } = JSON.parse(body);
+          const creds = getCredentials();
+          if (!creds) { res.writeHead(400, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'No credentials configured' })); return; }
+          if (!verifyPassword(password, creds.passwordHash, creds.salt)) {
+            recordFailedAuth(ip);
+            auditLog('reauth_failed', ip, {});
+            res.writeHead(401, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Invalid password' }));
+            return;
+          }
+          const mfaSecret = creds.mfaSecret || MFA_SECRET;
+          if (mfaSecret) {
+            if (!totp) { res.writeHead(401, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'TOTP required', needsTotp: true })); return; }
+            if (!verifyTOTP(mfaSecret, totp)) { res.writeHead(401, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Invalid TOTP code' })); return; }
+          }
+          auditLog('reauth_success', ip, {});
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ ok: true }));
+        } catch(e) { res.writeHead(400, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: e.message })); }
+      });
+      return;
+    }
+    if (req.url === '/api/sys-security') {
+      const { execSync } = require('child_process');
+      const run = (cmd) => { try { return execSync(cmd, { timeout: 10000 }).toString().replace(/</g, '&lt;').replace(/>/g, '&gt;'); } catch(e) { return e.stdout ? e.stdout.toString().replace(/</g, '&lt;').replace(/>/g, '&gt;') : 'Error: ' + e.message; } };
+      const data = {
+        ufw: run('ufw status verbose 2>&1'),
+        ports: run('ss -ltnp 2>&1'),
+        fail2ban: run('fail2ban-client status 2>&1 && echo "---" && fail2ban-client status sshd 2>&1'),
+        ssh: run('journalctl -u ssh --no-pager -n 50 --grep="Failed\\|Invalid\\|Accepted" 2>&1 || journalctl -u sshd --no-pager -n 50 --grep="Failed\\|Invalid\\|Accepted" 2>&1'),
+        audit: run('openclaw security audit 2>&1'),
+      };
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(data));
+      auditLog('sys_security_view', ip, {});
+      return;
+    }
     if (req.url === '/api/claude-usage-scrape' && req.method === 'POST') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       if (fs.existsSync(scrapeScript)) {
